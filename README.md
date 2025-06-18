@@ -24,7 +24,6 @@ exclusive scoop. The function sends a short prompt directing the model to
 answer with `true` if such language appears and `false` otherwise. Set the
 `OPENAI_API_KEY` environment variable before calling this function.
 
-When an article is flagged as mentioning M&A activity, the script sends an
-email notification. Configure SMTP settings by defining the environment
-variables `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
-`EMAIL_FROM`, and `EMAIL_TO`.
+When an article is flagged as mentioning M&A activity, the script posts a
+message to Slack. Set the `SLACK_WEBHOOK_URL` environment variable to an
+incoming webhook URL for your workspace.
