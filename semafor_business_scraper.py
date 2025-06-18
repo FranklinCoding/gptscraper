@@ -1,6 +1,4 @@
 import os
-import smtplib
-from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -14,13 +12,9 @@ SEEN_URLS_FILE = Path("seen_urls.txt")
 
 BUSINESS_URL = "https://www.semafor.com/section/business"
 
-# Email configuration
-SMTP_HOST = os.environ.get("SMTP_HOST")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", 587))
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD")
-EMAIL_FROM = os.environ.get("EMAIL_FROM")
-EMAIL_TO = os.environ.get("EMAIL_TO")
+
+# Slack configuration
+SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
 
 def fetch_articles():
@@ -96,22 +90,13 @@ def contains_ma_or_scoop(text: str) -> bool:
         return False
 
 
-def send_email(subject: str, body: str) -> None:
-    """Send an email if SMTP settings are configured."""
-    if not all([SMTP_HOST, SMTP_USERNAME, SMTP_PASSWORD, EMAIL_FROM, EMAIL_TO]):
+def send_slack_alert(text: str) -> None:
+    """Post a simple alert message to Slack using an incoming webhook."""
+    if not SLACK_WEBHOOK_URL:
         return
 
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
-    msg.set_content(body)
-
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USERNAME, SMTP_PASSWORD)
-            server.send_message(msg)
+        requests.post(SLACK_WEBHOOK_URL, json={"text": text}, timeout=5)
     except Exception:
         pass
 
@@ -132,7 +117,7 @@ def scrape():
 
         text = fetch_article_text(url)
         if contains_ma_or_scoop(text):
-            send_email("Semafor M&A Alert", f"{title}\n{url}")
+            send_slack_alert(f"Semafor M&A Alert\n{title}\n{url}")
 
     if new_urls:
         with SEEN_URLS_FILE.open("w", encoding="utf-8") as f:
