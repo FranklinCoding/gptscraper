@@ -1,4 +1,8 @@
-requests
-beautifulsoup4
-openai
 apscheduler
+beautifulsoup4
+fastapi
+feedparser
+httpx
+openai<1
+requests
+uvicorn[standard]
