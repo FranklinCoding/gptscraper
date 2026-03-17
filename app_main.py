@@ -27,7 +27,7 @@ CACHE_DIR.mkdir(exist_ok=True)
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "15"))
 MAX_ALERTS = 500
 HIGH_CONFIDENCE_ALERT = 80
-BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "7"))
+BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "60"))
 MARKET_TZ = ZoneInfo("America/New_York")
 
 RSS_SOURCES = [
@@ -270,7 +270,7 @@ class StockNewsEngine:
         for article in articles:
             await self._process_article(article, broadcast=True)
 
-    async def backfill_days(self, days: int = 7) -> None:
+    async def backfill_days(self, days: int = 60) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         articles = await self._fetch_all_sources()
         for article in articles:
