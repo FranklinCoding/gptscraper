@@ -24,7 +24,7 @@
   <div class="top">
     <div class="dot"></div>
     <div id="clock"></div>
-    <div id="status">Market: --</div>
+    <div id="status">Market: OPEN</div>
     <div id="total">Total alerts today: 0</div>
     <label>Type <select id="signalFilter"><option value="ALL">ALL</option><option>BUY</option><option>SELL</option><option>NEUTRAL</option></select></label>
     <label>Ticker <input id="tickerFilter" placeholder="AAPL" size="6" /></label>
@@ -43,7 +43,6 @@
 const feed = document.getElementById('feed');
 const board = document.getElementById('leaderboard');
 const total = document.getElementById('total');
-const statusEl = document.getElementById('status');
 const signalFilter = document.getElementById('signalFilter');
 const tickerFilter = document.getElementById('tickerFilter');
 const confFilter = document.getElementById('confidenceFilter');
@@ -79,20 +78,7 @@ function render(){
   total.textContent = `Total alerts today: ${alerts.length}`;
 }
 
-function refreshMeta(){
-  fetch('/api/meta')
-    .then(r=>r.json())
-    .then(data=>{
-      const status = data.market_status || 'UNKNOWN';
-      statusEl.textContent = `Market: ${status}`;
-      total.textContent = `Total alerts today: ${Number(data.total_alerts || alerts.length)}`;
-    })
-    .catch(()=>{});
-}
-
 fetch('/api/history').then(r=>r.json()).then(data=>{alerts = data.alerts || []; render(); renderLeaderboard(data.leaderboard || []);});
-refreshMeta();
-setInterval(refreshMeta, 30000);
 const ev = new EventSource('/api/stream');
 ev.onmessage = (event)=>{
   const msg = JSON.parse(event.data);

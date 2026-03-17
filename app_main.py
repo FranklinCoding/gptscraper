@@ -4,11 +4,9 @@ import os
 import re
 from collections import Counter, deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import feedparser
 import httpx
@@ -26,8 +24,6 @@ CACHE_DIR.mkdir(exist_ok=True)
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "15"))
 MAX_ALERTS = 500
 HIGH_CONFIDENCE_ALERT = 80
-BACKFILL_DAYS = int(os.environ.get("BACKFILL_DAYS", "7"))
-MARKET_TZ = ZoneInfo("America/New_York")
 
 RSS_SOURCES = [
     ("Yahoo Finance", "https://finance.yahoo.com/news/rssindex"),
@@ -83,26 +79,6 @@ class StockNewsEngine:
         self.clients: list[asyncio.Queue] = []
         self.tickers = self._load_tickers()
 
-    def _parse_published_at(self, value: str | None) -> datetime | None:
-        if not value:
-            return None
-
-        value = value.strip()
-        if not value:
-            return None
-
-        try:
-            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            try:
-                dt = parsedate_to_datetime(value)
-            except (TypeError, ValueError):
-                return None
-
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-
     def _load_tickers(self) -> set[str]:
         # Lightweight local base set; can be expanded via env var path.
         tickers = set(COMMON_TICKERS)
@@ -155,7 +131,7 @@ class StockNewsEngine:
                         "headline": e.get("title", "").strip(),
                         "url": e.get("link", "").strip(),
                         "summary": BeautifulSoup(e.get("summary", ""), "html.parser").get_text(" ", strip=True),
-                        "published_at": e.get("published", "") or e.get("updated", ""),
+                        "published_at": e.get("published", ""),
                     }
                 )
             return articles
@@ -186,60 +162,41 @@ class StockNewsEngine:
         except Exception:
             return []
 
-    async def _fetch_all_sources(self) -> list[dict[str, str]]:
+    async def poll_once(self) -> None:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             tasks = [self._fetch_rss(client, name, url) for name, url in RSS_SOURCES]
             tasks.append(self._fetch_finviz(client))
             groups = await asyncio.gather(*tasks)
-        return [item for group in groups for item in group]
 
-    async def _process_article(self, article: dict[str, str], broadcast: bool = True) -> None:
-        signature = hashlib.sha256(f"{article['url']}|{article['headline']}".encode()).hexdigest()
-        if signature in self.seen_hashes:
-            return
-        self.seen_hashes.add(signature)
+        for article in [item for group in groups for item in group]:
+            signature = hashlib.sha256(f"{article['url']}|{article['headline']}".encode()).hexdigest()
+            if signature in self.seen_hashes:
+                continue
+            self.seen_hashes.add(signature)
 
-        text_blob = f"{article['headline']} {article['summary']}"
-        tickers = self._extract_tickers(text_blob)
-        if not tickers:
-            return
+            text_blob = f"{article['headline']} {article['summary']}"
+            tickers = self._extract_tickers(text_blob)
+            if not tickers:
+                continue
 
-        signal, confidence, reason = self._score_sentiment(text_blob)
-        published_dt = self._parse_published_at(article.get("published_at")) or datetime.now(timezone.utc)
-        published_iso = published_dt.isoformat()
-        for ticker in tickers[:3]:
-            alert = Alert(
-                id=hashlib.md5(f"{signature}-{ticker}".encode()).hexdigest(),
-                signal=signal,
-                confidence=confidence,
-                ticker=ticker,
-                headline=article["headline"],
-                source=article["source"],
-                url=article["url"],
-                summary=article["summary"] or "No summary provided.",
-                reason=reason,
-                published_at=published_iso,
-                created_at=published_iso,
-            )
-            self.alerts.appendleft(alert)
-            if broadcast:
+            signal, confidence, reason = self._score_sentiment(text_blob)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for ticker in tickers[:3]:
+                alert = Alert(
+                    id=hashlib.md5(f"{signature}-{ticker}".encode()).hexdigest(),
+                    signal=signal,
+                    confidence=confidence,
+                    ticker=ticker,
+                    headline=article["headline"],
+                    source=article["source"],
+                    url=article["url"],
+                    summary=article["summary"] or "No summary provided.",
+                    reason=reason,
+                    published_at=article["published_at"] or now_iso,
+                    created_at=now_iso,
+                )
+                self.alerts.appendleft(alert)
                 await self.broadcast({"type": "alert", "payload": alert.dict()})
-
-    async def poll_once(self) -> None:
-        articles = await self._fetch_all_sources()
-        for article in articles:
-            await self._process_article(article, broadcast=True)
-
-    async def backfill_days(self, days: int = 7) -> None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        articles = await self._fetch_all_sources()
-        for article in articles:
-            published_dt = self._parse_published_at(article.get("published_at"))
-            if not published_dt:
-                continue
-            if published_dt < cutoff:
-                continue
-            await self._process_article(article, broadcast=False)
 
     async def broadcast(self, data: dict[str, Any]) -> None:
         stale = []
@@ -278,34 +235,11 @@ app = FastAPI(title="Real-Time Stock News Alert Dashboard")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-def get_market_status(now_utc: datetime | None = None) -> str:
-    now_utc = now_utc or datetime.now(timezone.utc)
-    ny = now_utc.astimezone(MARKET_TZ)
-
-    if ny.weekday() >= 5:
-        return "CLOSED"
-
-    minutes = ny.hour * 60 + ny.minute
-    pre_start = 4 * 60
-    market_open = 9 * 60 + 30
-    market_close = 16 * 60
-    after_close = 20 * 60
-
-    if market_open <= minutes < market_close:
-        return "OPEN"
-    if pre_start <= minutes < market_open:
-        return "PRE"
-    if market_close <= minutes < after_close:
-        return "AFTER"
-    return "CLOSED"
-
-
 @app.on_event("startup")
 async def startup() -> None:
     scheduler = AsyncIOScheduler()
     scheduler.add_job(engine.poll_once, "interval", seconds=POLL_SECONDS, max_instances=1)
     scheduler.start()
-    await engine.backfill_days(BACKFILL_DAYS)
     await engine.poll_once()
     app.state.scheduler = scheduler
 
@@ -330,14 +264,6 @@ async def index() -> str:
 async def history() -> dict[str, Any]:
     alerts = [a.dict() for a in list(engine.alerts)[:200]]
     return {"alerts": alerts, "leaderboard": engine.leaderboard(), "total": len(engine.alerts)}
-
-
-@app.get("/api/meta")
-async def meta() -> dict[str, Any]:
-    return {
-        "market_status": get_market_status(),
-        "total_alerts": len(engine.alerts),
-    }
 
 
 @app.get("/api/stream")

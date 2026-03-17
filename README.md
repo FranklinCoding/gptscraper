@@ -17,8 +17,6 @@ This repository includes a **real-time stock news alert dashboard** powered by F
 - Streams live alerts to a dark terminal-style dashboard.
 - Deduplicates stories by URL/headline hash.
 - Keeps the latest 500 alerts in memory.
-- Calculates real U.S. market status (PRE / OPEN / AFTER / CLOSED) using New York time.
-- Backfills and scores up to the last 7 days of RSS articles at startup (`BACKFILL_DAYS`).
 - Includes a disclaimer for informational use.
 
 ## Run locally
@@ -49,7 +47,6 @@ curl http://localhost:8000/healthz
    - Start command: `uvicorn app_main:app --host 0.0.0.0 --port $PORT`
 4. **Set environment variables**
    - `POLL_SECONDS=15` (or higher to reduce source load)
-   - `BACKFILL_DAYS=7` (how much historical RSS content to evaluate on boot)
    - Optional: `TICKER_FILE=/opt/render/project/src/data/tickers.txt`
 5. **Verify after deploy**
    - Check `/healthz`
