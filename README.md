@@ -1,29 +1,71 @@
 # gptscraper
 
-This repository contains simple utilities for scraping websites. The main script `semafor_business_scraper.py` retrieves article titles and URLs from [Semafor](https://www.semafor.com/) Business section.
+This repository includes a **real-time stock news alert dashboard** powered by FastAPI + Server-Sent Events (SSE).
 
-## Usage
+## What it does
+
+- Polls public financial news every 15 seconds (configurable via `POLL_SECONDS`):
+  - Finviz News
+  - Yahoo Finance RSS
+  - MarketWatch RSS
+  - SEC EDGAR 8-K Atom feed
+- Extracts ticker mentions with regex + ticker whitelist.
+- Scores sentiment from headline + summary and emits:
+  - `BUY`
+  - `SELL`
+  - `NEUTRAL`
+- Streams live alerts to a dark terminal-style dashboard.
+- Deduplicates stories by URL/headline hash.
+- Keeps the latest 500 alerts in memory.
+- Calculates real U.S. market status (PRE / OPEN / AFTER / CLOSED) using New York time.
+- Backfills and scores up to the last 7 days of RSS articles at startup (`BACKFILL_DAYS`).
+- Includes a disclaimer for informational use.
+
+## Run locally
 
 ```bash
-pip install -r requirements.txt  # install dependencies
-python semafor_business_scraper.py
+pip install -r requirements.txt
+uvicorn app_main:app --host 0.0.0.0 --port 8000
 ```
 
-The script runs continuously, scraping the Business section once every minute
-using APScheduler. Newly discovered URLs are printed and stored in
-`seen_urls.txt` so they are only displayed once.
+Open `http://localhost:8000`.
 
-Each run prints the article title followed by its URL.
+Health check:
 
-`semafor_business_scraper.py` also exposes a helper function `fetch_article_text(url)`
-that returns the full text of a given Semafor article.
+```bash
+curl http://localhost:8000/healthz
+```
 
-The module provides `contains_ma_or_scoop(text)` which uses OpenAI's API to
-decide whether article text references mergers, acquisitions, or claims an
-exclusive scoop. The function sends a short prompt directing the model to
-answer with `true` if such language appears and `false` otherwise. Set the
-`OPENAI_API_KEY` environment variable before calling this function.
+---
 
-When an article is flagged as mentioning M&A activity, the script posts a
-message to Slack. Set the `SLACK_WEBHOOK_URL` environment variable to an
-incoming webhook URL for your workspace.
+## How to get this live (production checklist)
+
+1. **Choose hosting (Render recommended)**
+   - This repo includes `render.yaml` for one-click setup.
+2. **Push repo to GitHub**
+   - Render will deploy from your default branch.
+3. **Create Web Service on Render**
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `uvicorn app_main:app --host 0.0.0.0 --port $PORT`
+4. **Set environment variables**
+   - `POLL_SECONDS=15` (or higher to reduce source load)
+   - `BACKFILL_DAYS=7` (how much historical RSS content to evaluate on boot)
+   - Optional: `TICKER_FILE=/opt/render/project/src/data/tickers.txt`
+5. **Verify after deploy**
+   - Check `/healthz`
+   - Open `/` and confirm alerts stream.
+6. **Operational improvements (recommended)**
+   - Move in-memory alerts to SQLite/Redis for restart persistence.
+   - Add structured logging + error monitoring (Sentry).
+   - Add source-specific rate limiting/backoff.
+   - Add authenticated admin page for tuning signal thresholds.
+
+---
+
+## Existing Semafor scraper
+
+The original `semafor_business_scraper.py` script is still available:
+
+```bash
+python semafor_business_scraper.py
+```
