@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 import feedparser
 import httpx
@@ -57,11 +57,9 @@ SELL_WORDS = {
 
 TICKER_REGEX = re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b")
 WORD_REGEX = re.compile(r"\b[A-Z]{2,5}(?:\.[A-Z])?\b")
-
 NOISE_TOKENS = {"THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "NEWS", "INC", "CEO", "ETF"}
 SYMBOL_HINT_REGEX = re.compile(r"(?:NYSE|NASDAQ|AMEX|OTC)[:\s]+([A-Z]{1,5}(?:\.[A-Z])?)")
 MACRO_HINT_WORDS = ("s&p", "dow", "nasdaq", "stocks", "markets", "fed", "treasury", "wall street")
-
 
 @dataclass
 class Alert:
@@ -107,7 +105,6 @@ class StockNewsEngine:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
-
     def _load_tickers(self) -> set[str]:
         # Lightweight local base set; can be expanded via env var path.
         tickers = set(COMMON_TICKERS)
@@ -225,7 +222,7 @@ class StockNewsEngine:
         except Exception:
             return []
 
-    async def _fetch_all_sources(self) -> list[dict[str, str]]:
+    async def _fetch_all_sources(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             tasks = [self._fetch_rss(client, name, url) for name, url in RSS_SOURCES]
             tasks.append(self._fetch_finviz(client))
@@ -283,7 +280,6 @@ class StockNewsEngine:
             if published_dt < cutoff:
                 continue
             await self._process_article(article, broadcast=False)
-
     async def broadcast(self, data: dict[str, Any]) -> None:
         stale = []
         for q in self.clients:
@@ -341,8 +337,6 @@ def get_market_status(now_utc: datetime | None = None) -> str:
     if market_close <= minutes < after_close:
         return "AFTER"
     return "CLOSED"
-
-
 @app.on_event("startup")
 async def startup() -> None:
     scheduler = AsyncIOScheduler()
@@ -381,8 +375,6 @@ async def meta() -> dict[str, Any]:
         "market_status": get_market_status(),
         "total_alerts": len(engine.alerts),
     }
-
-
 @app.get("/api/stream")
 async def stream(request: Request):
     async def generator():
