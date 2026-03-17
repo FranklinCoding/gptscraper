@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock News Alert Dashboard</title>
+  <style>
+    body { margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#030303; color:#d7ffe0; }
+    .grid { display:grid; grid-template-columns: 1fr 300px; height:100vh; }
+    .top { position:sticky; top:0; background:#0b0b0b; border-bottom:1px solid #1f1f1f; padding:10px 16px; display:flex; gap:20px; align-items:center; z-index:10; }
+    .dot { width:10px;height:10px;border-radius:50%; background:#19ff6a; box-shadow:0 0 8px #19ff6a; animation:blink 1.5s infinite; }
+    @keyframes blink {50%{opacity:.3}} .feed {overflow:auto; padding:10px 16px 60px;} .card {border:1px solid #1d1d1d; background:#090909; padding:12px; margin-bottom:10px; animation:slide .25s ease;}
+    @keyframes slide {from{transform:translateY(-8px);opacity:0}to{transform:translateY(0);opacity:1}}
+    .BUY{color:#16ff64}.SELL{color:#ff4a4a}.NEUTRAL{color:#ffdb58}
+    .badge{display:inline-block;font-weight:700;padding:3px 7px;border:1px solid currentColor;margin-right:8px}
+    .ticker{font-size:1.2rem;font-weight:700}
+    .progress{height:6px;background:#222;margin-top:8px}.bar{height:100%}
+    aside{border-left:1px solid #1f1f1f;padding:12px;background:#070707}
+    input,select{background:#111;border:1px solid #2a2a2a;color:#d7ffe0;padding:5px}
+    .muted{color:#94a399;font-size:.9rem}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="dot"></div>
+    <div id="clock"></div>
+    <div id="status">Market: OPEN</div>
+    <div id="total">Total alerts today: 0</div>
+    <label>Type <select id="signalFilter"><option value="ALL">ALL</option><option>BUY</option><option>SELL</option><option>NEUTRAL</option></select></label>
+    <label>Ticker <input id="tickerFilter" placeholder="AAPL" size="6" /></label>
+    <label>Min confidence <input id="confidenceFilter" type="range" min="0" max="100" value="0" /></label>
+    <span id="confidenceVal">0%</span>
+  </div>
+  <div class="grid">
+    <main class="feed" id="feed"></main>
+    <aside>
+      <h3>Ticker Leaderboard (1h)</h3>
+      <div id="leaderboard" class="muted">Loading...</div>
+      <p class="muted" style="margin-top:20px">Not financial advice. For informational purposes only.</p>
+    </aside>
+  </div>
+<script>
+const feed = document.getElementById('feed');
+const board = document.getElementById('leaderboard');
+const total = document.getElementById('total');
+const signalFilter = document.getElementById('signalFilter');
+const tickerFilter = document.getElementById('tickerFilter');
+const confFilter = document.getElementById('confidenceFilter');
+const confVal = document.getElementById('confidenceVal');
+let alerts = [];
+
+function updateClock(){document.getElementById('clock').textContent = new Date().toLocaleString();}
+setInterval(updateClock,1000); updateClock();
+confFilter.addEventListener('input', ()=>{confVal.textContent = confFilter.value + '%'; render();});
+signalFilter.addEventListener('change',render); tickerFilter.addEventListener('input',render);
+
+function renderLeaderboard(items){ board.innerHTML = items.map(i=>`<div>${i.ticker}: ${i.count}</div>`).join('') || 'No alerts yet'; }
+function card(a){
+  const color = a.signal==='BUY'?'#16ff64':a.signal==='SELL'?'#ff4a4a':'#ffdb58';
+  return `<article class="card" onclick="window.open('${a.url}','_blank')">
+    <div><span class="badge ${a.signal}">${a.signal}</span><span class="ticker">${a.ticker}</span></div>
+    <div style="font-weight:700;margin-top:6px">${a.headline}</div>
+    <div class="muted">${a.source} • ${new Date(a.created_at).toLocaleTimeString()}</div>
+    <div class="progress"><div class="bar" style="width:${a.confidence}%;background:${color}"></div></div>
+    <div class="muted">${a.reason}</div>
+  </article>`;
+}
+function passes(a){
+  const sf = signalFilter.value, tf = tickerFilter.value.trim().toUpperCase(), cf = Number(confFilter.value);
+  if (sf !== 'ALL' && a.signal !== sf) return false;
+  if (tf && a.ticker !== tf) return false;
+  if (a.confidence < cf) return false;
+  return true;
+}
+function render(){
+  const filtered = alerts.filter(passes);
+  feed.innerHTML = filtered.map(card).join('');
+  total.textContent = `Total alerts today: ${alerts.length}`;
+}
+
+fetch('/api/history').then(r=>r.json()).then(data=>{alerts = data.alerts || []; render(); renderLeaderboard(data.leaderboard || []);});
+const ev = new EventSource('/api/stream');
+ev.onmessage = (event)=>{
+  const msg = JSON.parse(event.data);
+  if (msg.type === 'bootstrap') { alerts = msg.payload || []; render(); return; }
+  if (msg.type === 'alert') {
+    alerts.unshift(msg.payload);
+    alerts = alerts.slice(0,500);
+    render();
+    fetch('/api/history').then(r=>r.json()).then(d=>renderLeaderboard(d.leaderboard || []));
+  }
+};
+</script>
+</body>
+</html>
