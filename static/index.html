@@ -5,19 +5,41 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Stock News Alert Dashboard</title>
   <style>
-    body { margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:#030303; color:#d7ffe0; }
-    .grid { display:grid; grid-template-columns: 1fr 300px; height:100vh; }
-    .top { position:sticky; top:0; background:#0b0b0b; border-bottom:1px solid #1f1f1f; padding:10px 16px; display:flex; gap:20px; align-items:center; z-index:10; }
-    .dot { width:10px;height:10px;border-radius:50%; background:#19ff6a; box-shadow:0 0 8px #19ff6a; animation:blink 1.5s infinite; }
-    @keyframes blink {50%{opacity:.3}} .feed {overflow:auto; padding:10px 16px 60px;} .card {border:1px solid #1d1d1d; background:#090909; padding:12px; margin-bottom:10px; animation:slide .25s ease;}
+    :root{
+      --bg:#030303;
+      --panel:#090909;
+      --panel-2:#070707;
+      --text:#d7ffe0;
+      --muted:#94a399;
+      --line:#1f1f1f;
+      --buy:#16ff64;
+      --sell:#ff4a4a;
+      --neutral:#ffdb58;
+      --good:#54f7b0;
+      --bad:#ff7b7b;
+      --pending:#7bb8ff;
+    }
+    body { margin:0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--bg); color:var(--text); }
+    .grid { display:grid; grid-template-columns: 1fr 320px; height:100vh; }
+    .top { position:sticky; top:0; background:#0b0b0b; border-bottom:1px solid var(--line); padding:10px 16px; display:flex; gap:18px; align-items:center; z-index:10; flex-wrap:wrap; }
+    .dot { width:10px;height:10px;border-radius:50%; background:var(--buy); box-shadow:0 0 8px var(--buy); animation:blink 1.5s infinite; }
+    @keyframes blink {50%{opacity:.3}}
+    .feed {overflow:auto; padding:10px 16px 60px;}
+    .card {border:1px solid #1d1d1d; background:var(--panel); padding:12px; margin-bottom:10px; animation:slide .25s ease;}
     @keyframes slide {from{transform:translateY(-8px);opacity:0}to{transform:translateY(0);opacity:1}}
-    .BUY{color:#16ff64}.SELL{color:#ff4a4a}.NEUTRAL{color:#ffdb58}
+    .BUY{color:var(--buy)} .SELL{color:var(--sell)}
     .badge{display:inline-block;font-weight:700;padding:3px 7px;border:1px solid currentColor;margin-right:8px}
     .ticker{font-size:1.2rem;font-weight:700}
     .progress{height:6px;background:#222;margin-top:8px}.bar{height:100%}
-    aside{border-left:1px solid #1f1f1f;padding:12px;background:#070707}
-    input,select{background:#111;border:1px solid #2a2a2a;color:#d7ffe0;padding:5px}
-    .muted{color:#94a399;font-size:.9rem}
+    aside{border-left:1px solid var(--line);padding:12px;background:var(--panel-2);overflow:auto}
+    input,select{background:#111;border:1px solid #2a2a2a;color:var(--text);padding:5px}
+    .muted{color:var(--muted);font-size:.9rem}
+    .pill{display:inline-block;padding:2px 7px;border:1px solid currentColor;margin-right:6px;margin-top:8px;font-size:.85rem}
+    .eval-correct{color:var(--good)}
+    .eval-incorrect{color:var(--bad)}
+    .eval-flat{color:var(--neutral)}
+    .eval-pending,.eval-unavailable,.eval-skipped{color:var(--pending)}
+    .section{border:1px solid #191919;padding:10px;margin-bottom:12px;background:#0a0a0a}
   </style>
 </head>
 <body>
@@ -26,16 +48,23 @@
     <div id="clock"></div>
     <div id="status">Market: --</div>
     <div id="total">Total alerts today: 0</div>
-    <label>Type <select id="signalFilter"><option value="ALL">ALL</option><option>BUY</option><option>SELL</option><option>NEUTRAL</option></select></label>
-    <label>Ticker <input id="tickerFilter" placeholder="AAPL" size="6" /></label>
+    <div id="accuracy">ML accuracy: --</div>
+    <label>Type <select id="signalFilter"><option value="ALL">ALL</option><option>BUY</option><option>SELL</option></select></label>
+    <div id="tickerFilters" class="muted">Tickers loading...</div>
     <label>Min confidence <input id="confidenceFilter" type="range" min="0" max="100" value="0" /></label>
     <span id="confidenceVal">0%</span>
   </div>
   <div class="grid">
     <main class="feed" id="feed"></main>
     <aside>
-      <h3>Ticker Leaderboard (1h)</h3>
-      <div id="leaderboard" class="muted">Loading...</div>
+      <div class="section">
+        <h3>Model Feedback</h3>
+        <div id="evaluationSummary" class="muted">Loading...</div>
+      </div>
+      <div class="section">
+        <h3>Ticker Leaderboard (1h)</h3>
+        <div id="leaderboard" class="muted">Loading...</div>
+      </div>
       <p class="muted" style="margin-top:20px">Not financial advice. For informational purposes only.</p>
     </aside>
   </div>
@@ -44,64 +73,164 @@ const feed = document.getElementById('feed');
 const board = document.getElementById('leaderboard');
 const total = document.getElementById('total');
 const statusEl = document.getElementById('status');
+const accuracyEl = document.getElementById('accuracy');
+const evaluationSummaryEl = document.getElementById('evaluationSummary');
 const signalFilter = document.getElementById('signalFilter');
-const tickerFilter = document.getElementById('tickerFilter');
+const tickerFiltersEl = document.getElementById('tickerFilters');
 const confFilter = document.getElementById('confidenceFilter');
 const confVal = document.getElementById('confidenceVal');
 let alerts = [];
+let selectedTickers = new Set();
 
 function updateClock(){document.getElementById('clock').textContent = new Date().toLocaleString();}
 setInterval(updateClock,1000); updateClock();
 confFilter.addEventListener('input', ()=>{confVal.textContent = confFilter.value + '%'; render();});
-signalFilter.addEventListener('change',render); tickerFilter.addEventListener('input',render);
+signalFilter.addEventListener('change',render);
 
-function renderLeaderboard(items){ board.innerHTML = items.map(i=>`<div>${i.ticker}: ${i.count}</div>`).join('') || 'No alerts yet'; }
-function card(a){
-  const color = a.signal==='BUY'?'#16ff64':a.signal==='SELL'?'#ff4a4a':'#ffdb58';
-  return `<article class="card" onclick="window.open('${a.url}','_blank')">
-    <div><span class="badge ${a.signal}">${a.signal}</span><span class="ticker">${a.ticker}</span></div>
-    <div style="font-weight:700;margin-top:6px">${a.headline}</div>
-    <div class="muted">${a.source} • ${new Date(a.created_at).toLocaleTimeString()}</div>
-    <div class="progress"><div class="bar" style="width:${a.confidence}%;background:${color}"></div></div>
-    <div class="muted">${a.reason}</div>
+function renderLeaderboard(items){
+  board.innerHTML = items.map(item=>`<div>${item.ticker}: ${item.count}</div>`).join('') || 'No alerts yet';
+}
+
+function syncTickerFilters(){
+  const tickers = [...new Set(alerts.map(alert => alert.ticker))].sort();
+  if (!tickers.length) {
+    tickerFiltersEl.textContent = 'No tickers yet';
+    return;
+  }
+  const active = new Set([...selectedTickers].filter(ticker => tickers.includes(ticker)));
+  selectedTickers = active;
+  tickerFiltersEl.innerHTML = tickers.map(ticker => {
+    const checked = !selectedTickers.size || selectedTickers.has(ticker) ? 'checked' : '';
+    return `<label style="margin-right:10px;display:inline-block"><input type="checkbox" value="${ticker}" ${checked} /> ${ticker}</label>`;
+  }).join('');
+  tickerFiltersEl.querySelectorAll('input[type="checkbox"]').forEach(input => {
+    input.addEventListener('change', () => {
+      const checkedTickers = [...tickerFiltersEl.querySelectorAll('input[type="checkbox"]:checked')].map(node => node.value);
+      selectedTickers = new Set(checkedTickers);
+      render();
+    });
+  });
+}
+
+function renderEvaluationSummary(summary){
+  if (!summary) {
+    evaluationSummaryEl.textContent = 'No evaluation data yet';
+    accuracyEl.textContent = 'ML accuracy: --';
+    return;
+  }
+  const accuracy = summary.accuracy_pct == null ? '--' : `${summary.accuracy_pct}%`;
+  accuracyEl.textContent = `ML accuracy: ${accuracy}`;
+  evaluationSummaryEl.innerHTML = [
+    `<div>Evaluated alerts: ${summary.evaluated}</div>`,
+    `<div>Correct: ${summary.correct}</div>`,
+    `<div>Flat: ${summary.flat}</div>`,
+    `<div>Pending: ${summary.pending}</div>`,
+    `<div>Window: ${summary.window_minutes}m</div>`,
+    `<div>Move threshold: ${summary.threshold_pct}%</div>`
+  ].join('');
+}
+
+function evaluationMarkup(alert){
+  const evaluation = alert.evaluation;
+  if (!evaluation) {
+    return `<div class="pill eval-pending">ML pending</div>`;
+  }
+  const cls = `eval-${evaluation.status}`;
+  const pct = evaluation.pct_change == null ? '' : ` ${evaluation.pct_change}%`;
+  const beforePrice = evaluation.before_price == null ? '--' : evaluation.before_price;
+  const afterPrice = evaluation.after_price == null ? '--' : evaluation.after_price;
+  return `<div>
+    <div class="pill ${cls}">ML ${evaluation.status.toUpperCase()}${pct}</div>
+    <div class="muted" style="margin-top:6px">1h before: ${beforePrice} | 1h after: ${afterPrice}</div>
+  </div>`;
+}
+
+function card(alert){
+  const color = alert.signal==='BUY'?'#16ff64':alert.signal==='SELL'?'#ff4a4a':'#ffdb58';
+  const modelScore = alert.model_score == null ? '--' : `${alert.model_score}%`;
+  return `<article class="card" onclick="window.open('${alert.url}','_blank')">
+    <div><span class="badge ${alert.signal}">${alert.signal}</span><span class="ticker">${alert.ticker}</span></div>
+    <div style="font-weight:700;margin-top:6px">${alert.headline}</div>
+    <div class="muted">${alert.source} | ${new Date(alert.created_at).toLocaleString()}</div>
+    <div class="progress"><div class="bar" style="width:${alert.confidence}%;background:${color}"></div></div>
+    <div class="muted">${alert.reason}</div>
+    <div class="muted" style="margin-top:8px">Model confidence: ${modelScore}</div>
+    ${evaluationMarkup(alert)}
   </article>`;
 }
-function passes(a){
-  const sf = signalFilter.value, tf = tickerFilter.value.trim().toUpperCase(), cf = Number(confFilter.value);
-  if (sf !== 'ALL' && a.signal !== sf) return false;
-  if (tf && a.ticker !== tf) return false;
-  if (a.confidence < cf) return false;
+
+function passes(alert){
+  const sf = signalFilter.value;
+  const cf = Number(confFilter.value);
+  if (sf !== 'ALL' && alert.signal !== sf) return false;
+  if (selectedTickers.size && !selectedTickers.has(alert.ticker)) return false;
+  if (alert.confidence < cf) return false;
   return true;
 }
+
 function render(){
-  const filtered = alerts.filter(passes);
+  const filtered = alerts
+    .slice()
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .filter(passes);
   feed.innerHTML = filtered.map(card).join('');
   total.textContent = `Total alerts today: ${alerts.length}`;
 }
 
 function refreshMeta(){
   fetch('/api/meta')
-    .then(r=>r.json())
+    .then(resp=>resp.json())
     .then(data=>{
       const status = data.market_status || 'UNKNOWN';
       statusEl.textContent = `Market: ${status}`;
       total.textContent = `Total alerts today: ${Number(data.total_alerts || alerts.length)}`;
+      renderEvaluationSummary(data.evaluation_summary);
     })
     .catch(()=>{});
 }
 
-fetch('/api/history').then(r=>r.json()).then(data=>{alerts = data.alerts || []; render(); renderLeaderboard(data.leaderboard || []);});
+function upsertAlert(nextAlert){
+  const idx = alerts.findIndex(alert => alert.id === nextAlert.id);
+  if (idx >= 0) {
+    alerts[idx] = nextAlert;
+  } else {
+    alerts.unshift(nextAlert);
+    alerts = alerts.slice(0, 500);
+  }
+}
+
+fetch('/api/history')
+  .then(resp=>resp.json())
+  .then(data=>{
+    alerts = data.alerts || [];
+    syncTickerFilters();
+    render();
+    renderLeaderboard(data.leaderboard || []);
+    renderEvaluationSummary(data.evaluation_summary);
+  });
+
 refreshMeta();
 setInterval(refreshMeta, 30000);
+
 const ev = new EventSource('/api/stream');
 ev.onmessage = (event)=>{
   const msg = JSON.parse(event.data);
-  if (msg.type === 'bootstrap') { alerts = msg.payload || []; render(); return; }
-  if (msg.type === 'alert') {
-    alerts.unshift(msg.payload);
-    alerts = alerts.slice(0,500);
+  if (msg.type === 'bootstrap') {
+    alerts = msg.payload || [];
+    syncTickerFilters();
     render();
-    fetch('/api/history').then(r=>r.json()).then(d=>renderLeaderboard(d.leaderboard || []));
+    return;
+  }
+  if (msg.type === 'alert' || msg.type === 'alert_update') {
+    upsertAlert(msg.payload);
+    syncTickerFilters();
+    render();
+    fetch('/api/history')
+      .then(resp=>resp.json())
+      .then(data=>{
+        renderLeaderboard(data.leaderboard || []);
+        renderEvaluationSummary(data.evaluation_summary);
+      });
   }
 };
 </script>

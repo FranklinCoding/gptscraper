@@ -12,3 +12,7 @@ services:
         value: "15"
       - key: BACKFILL_DAYS
         value: "60"
+      - key: EVAL_WINDOW_MINUTES
+        value: "60"
+      - key: EVAL_THRESHOLD_PCT
+        value: "0.25"
