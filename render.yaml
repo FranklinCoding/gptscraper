@@ -11,4 +11,4 @@ services:
       - key: POLL_SECONDS
         value: "15"
       - key: BACKFILL_DAYS
-        value: "7"
+        value: "60"
