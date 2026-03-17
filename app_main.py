@@ -49,6 +49,19 @@ COMMON_TICKERS = {
     "KO", "COST", "BAC", "ABBV", "NFLX", "ADBE", "AMD", "CRM", "ORCL", "INTC", "CSCO",
     "SPY", "QQQ", "DIA", "IWM",
 }
+COMMON_COMPANY_ALIASES = {
+    "APPLE": "AAPL",
+    "MICROSOFT": "MSFT",
+    "NVIDIA": "NVDA",
+    "AMAZON": "AMZN",
+    "META": "META",
+    "ALPHABET": "GOOGL",
+    "TESLA": "TSLA",
+    "ELI LILLY": "LLY",
+    "LILLY": "LLY",
+    "NEBIUS": "NBIS",
+    "NEBIUS GROUP": "NBIS",
+}
 
 BUY_WORDS = {
     "beat", "beats", "surge", "soar", "record", "upgrade", "upside", "growth", "strong",
@@ -62,6 +75,9 @@ SELL_WORDS = {
 TICKER_REGEX = re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b(?!-\d)")
 WORD_REGEX = re.compile(r"\b[A-Z]{2,5}(?:\.[A-Z])?\b(?!-\d)")
 NOISE_TOKENS = {"THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "NEWS", "INC", "CEO", "ETF"}
+GENERIC_ACRONYM_TOKENS = {
+    "AI", "IPO", "EPS", "FDA", "SEC", "EV", "USA", "US", "Q1", "Q2", "Q3", "Q4", "FY", "YOY", "CPU", "GPU",
+}
 SYMBOL_HINT_REGEX = re.compile(r"(?:NYSE|NASDAQ|AMEX|OTC)[:\s]+([A-Z]{1,5}(?:\.[A-Z])?)")
 MACRO_HINT_WORDS = (
     "s&p 500",
@@ -123,7 +139,7 @@ class StockNewsEngine:
         self.alert_index: dict[str, Alert] = {}
         self.seen_hashes: set[str] = set()
         self.clients: list[asyncio.Queue] = []
-        self.tickers = self._load_tickers()
+        self.tickers, self.company_aliases = self._load_reference_data()
         self.model_stats: dict[str, dict[str, float]] = {
             "global": {"wins": 1.0, "trials": 2.0},
         }
@@ -152,8 +168,16 @@ class StockNewsEngine:
     def _chart_symbol(self, ticker: str) -> str:
         return ticker.replace(".", "-")
 
-    def _load_tickers(self) -> set[str]:
+    def _normalize_company_name(self, value: str) -> str:
+        value = value.upper()
+        value = re.sub(r"[^A-Z0-9& ]+", " ", value)
+        value = re.sub(r"\b(CORPORATION|CORP|COMPANY|CO|HOLDINGS|HOLDING|GROUP|INCORPORATED|INC|LIMITED|LTD|PLC|N V|NV|S A|SA)\b", " ", value)
+        value = re.sub(r"\s+", " ", value).strip()
+        return value
+
+    def _load_reference_data(self) -> tuple[set[str], dict[str, str]]:
         tickers = set(COMMON_TICKERS)
+        aliases = dict(COMMON_COMPANY_ALIASES)
         custom_path = os.environ.get("TICKER_FILE")
         if custom_path and Path(custom_path).exists():
             with open(custom_path, "r", encoding="utf-8") as fh:
@@ -170,15 +194,28 @@ class StockNewsEngine:
                     symbol = str(row.get("ticker", "")).upper().strip()
                     if symbol:
                         tickers.add(symbol)
+                        title = self._normalize_company_name(str(row.get("title", "")).strip())
+                        if title and len(title) >= 4:
+                            aliases[title] = symbol
         except Exception:
             pass
-        return tickers
+        return tickers, aliases
 
     def _is_probable_macro_story(self, text: str, url: str = "") -> bool:
         lowered = f"{text} {url}".lower()
         macro_hits = sum(phrase in lowered for phrase in MACRO_HINT_WORDS)
         index_mentions = sum(token.lower() in lowered for token in ("spy", "qqq", "dia", "iwm"))
         return macro_hits + index_mentions >= 1
+
+    def _extract_company_alias_tickers(self, text: str) -> set[str]:
+        normalized = self._normalize_company_name(text)
+        if not normalized:
+            return set()
+        found: set[str] = set()
+        for alias, ticker in self.company_aliases.items():
+            if alias in normalized:
+                found.add(ticker)
+        return found
 
     def _extract_tickers(self, text: str, url: str = "", symbols: list[str] | None = None) -> list[str]:
         explicit = {m.group(1) for m in TICKER_REGEX.finditer(text)}
@@ -203,8 +240,11 @@ class StockNewsEngine:
 
         found = set(explicit)
         if not found:
+            found.update(self._extract_company_alias_tickers(text))
+
+        if not found:
             for token in WORD_REGEX.findall(text):
-                if token in self.tickers:
+                if token in self.tickers and token not in GENERIC_ACRONYM_TOKENS:
                     found.add(token)
 
         cleaned = {token for token in found if token not in NOISE_TOKENS}
