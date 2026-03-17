@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import hashlib
 import os
 import re
@@ -22,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
 CACHE_DIR = BASE_DIR / ".cache"
+DATA_DIR = BASE_DIR / "data"
 CACHE_DIR.mkdir(exist_ok=True)
 
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "15"))
@@ -95,6 +97,7 @@ MACRO_HINT_WORDS = (
 )
 INDEX_PROXY_TICKERS = {"SPY", "QQQ", "DIA", "IWM"}
 FINAL_EVAL_STATES = {"correct", "incorrect", "flat", "unavailable", "skipped"}
+NYSE_TICKER_FILE = DATA_DIR / "nyse_tickers.csv"
 
 
 @dataclass
@@ -178,6 +181,18 @@ class StockNewsEngine:
     def _load_reference_data(self) -> tuple[set[str], dict[str, str]]:
         tickers = set(COMMON_TICKERS)
         aliases = dict(COMMON_COMPANY_ALIASES)
+
+        if NYSE_TICKER_FILE.exists():
+            with open(NYSE_TICKER_FILE, "r", encoding="utf-8", newline="") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    symbol = str(row.get("ticker", "")).upper().strip()
+                    company_name = self._normalize_company_name(str(row.get("company_name", "")).strip())
+                    if symbol:
+                        tickers.add(symbol)
+                    if symbol and company_name and len(company_name) >= 4:
+                        aliases[company_name] = symbol
+
         custom_path = os.environ.get("TICKER_FILE")
         if custom_path and Path(custom_path).exists():
             with open(custom_path, "r", encoding="utf-8") as fh:

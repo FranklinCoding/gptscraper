@@ -2,6 +2,8 @@
 
 This repository includes a **real-time stock news alert dashboard** powered by FastAPI + Server-Sent Events (SSE).
 
+The app now includes a local NYSE ticker reference at `data/nyse_tickers.csv` for ticker-to-company matching.
+
 ## What it does
 
 - Polls public financial news every 15 seconds (configurable via `POLL_SECONDS`):
