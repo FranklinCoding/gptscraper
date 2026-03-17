@@ -114,6 +114,15 @@ class AlertEvaluation:
 
 
 @dataclass
+class Candle:
+    time: str
+    open: float
+    high: float
+    low: float
+    close: float
+
+
+@dataclass
 class Alert:
     id: str
     signal: str
@@ -128,6 +137,7 @@ class Alert:
     created_at: str
     model_score: int | None = None
     evaluation: AlertEvaluation | None = None
+    intraday_chart: list[Candle] | None = None
 
     def dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -386,7 +396,7 @@ class StockNewsEngine:
         ticker: str,
         start_dt: datetime,
         end_dt: datetime,
-    ) -> list[tuple[datetime, float]]:
+    ) -> list[dict[str, Any]]:
         chart_symbol = self._chart_symbol(ticker)
         window_start = int((start_dt - timedelta(hours=2)).timestamp())
         window_end = int((end_dt + timedelta(hours=2)).timestamp())
@@ -417,17 +427,49 @@ class StockNewsEngine:
         result = results[0]
         timestamps = result.get("timestamp") or []
         quotes = (result.get("indicators") or {}).get("quote") or [{}]
-        closes = quotes[0].get("close") or []
+        quote = quotes[0]
+        opens = quote.get("open") or []
+        highs = quote.get("high") or []
+        lows = quote.get("low") or []
+        closes = quote.get("close") or []
 
-        series: list[tuple[datetime, float]] = []
-        for raw_ts, raw_close in zip(timestamps, closes):
-            if raw_close is None:
+        series: list[dict[str, Any]] = []
+        for raw_ts, raw_open, raw_high, raw_low, raw_close in zip(timestamps, opens, highs, lows, closes):
+            if None in (raw_open, raw_high, raw_low, raw_close):
                 continue
             point_dt = datetime.fromtimestamp(raw_ts, tz=timezone.utc)
-            series.append((point_dt, float(raw_close)))
+            series.append(
+                {
+                    "time": point_dt,
+                    "open": float(raw_open),
+                    "high": float(raw_high),
+                    "low": float(raw_low),
+                    "close": float(raw_close),
+                }
+            )
 
         self.price_cache[cache_key] = series
         return series
+
+    async def _build_intraday_chart(self, ticker: str, alert_dt: datetime) -> list[Candle]:
+        day_start = alert_dt.astimezone(MARKET_TZ).replace(hour=4, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        day_end = alert_dt.astimezone(MARKET_TZ).replace(hour=20, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        series = await self._fetch_price_series(ticker, day_start, day_end)
+        candles: list[Candle] = []
+        for point in series:
+            point_dt = point["time"]
+            if point_dt < day_start or point_dt > day_end:
+                continue
+            candles.append(
+                Candle(
+                    time=point_dt.isoformat(),
+                    open=round(point["open"], 4),
+                    high=round(point["high"], 4),
+                    low=round(point["low"], 4),
+                    close=round(point["close"], 4),
+                )
+            )
+        return candles[-96:]
 
     async def _evaluate_alert(self, alert: Alert, broadcast: bool) -> None:
         created_dt = datetime.fromisoformat(alert.created_at)
@@ -445,18 +487,18 @@ class StockNewsEngine:
             alert.evaluation = AlertEvaluation(status="unavailable", target_at=target_iso, notes="Price series unavailable for ticker.")
             return
 
-        before_points = [(dt, price) for dt, price in series if dt <= before_target_dt]
-        after_points = [(dt, price) for dt, price in series if dt >= target_dt]
-        before_candidates = [price for _, price in before_points]
-        after_candidates = [price for _, price in after_points]
+        before_points = [point for point in series if point["time"] <= before_target_dt]
+        after_points = [point for point in series if point["time"] >= target_dt]
+        before_candidates = [point["close"] for point in before_points]
+        after_candidates = [point["close"] for point in after_points]
         if not before_candidates or not after_candidates:
             alert.evaluation = AlertEvaluation(status="unavailable", target_at=target_iso, notes="Not enough candles around alert time.")
             return
 
         before_price = before_candidates[-1]
         after_price = after_candidates[0]
-        before_dt = before_points[-1][0]
-        after_dt = after_points[0][0]
+        before_dt = before_points[-1]["time"]
+        after_dt = after_points[0]["time"]
         pct_change = ((after_price - before_price) / before_price) * 100
 
         if abs(pct_change) < EVAL_THRESHOLD_PCT:
@@ -521,6 +563,7 @@ class StockNewsEngine:
                 published_at=published_iso,
                 created_at=published_iso,
                 model_score=self._estimate_model_score(signal, article["source"], ticker),
+                intraday_chart=await self._build_intraday_chart(ticker, published_dt),
             )
             await self._evaluate_alert(alert, broadcast=False)
             self._store_alert(alert)
