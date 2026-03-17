@@ -40,6 +40,12 @@
     .eval-flat{color:var(--neutral)}
     .eval-pending,.eval-unavailable,.eval-skipped{color:var(--pending)}
     .section{border:1px solid #191919;padding:10px;margin-bottom:12px;background:#0a0a0a}
+    .ticker-menu{position:relative}
+    .ticker-menu button{background:#111;border:1px solid #2a2a2a;color:var(--text);padding:6px 10px;cursor:pointer}
+    .ticker-menu-panel{position:absolute;top:110%;left:0;width:280px;max-height:320px;overflow:auto;background:#0b0b0b;border:1px solid #2a2a2a;padding:10px;box-shadow:0 12px 24px rgba(0,0,0,.35)}
+    .ticker-menu-panel.hidden{display:none}
+    .ticker-option{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px}
+    .ticker-option label{display:flex;gap:8px;align-items:center}
   </style>
 </head>
 <body>
@@ -50,7 +56,13 @@
     <div id="total">Total alerts today: 0</div>
     <div id="accuracy">ML accuracy: --</div>
     <label>Type <select id="signalFilter"><option value="ALL">ALL</option><option>BUY</option><option>SELL</option></select></label>
-    <div id="tickerFilters" class="muted">Tickers loading...</div>
+    <div class="ticker-menu">
+      <button id="tickerMenuButton" type="button">Tickers</button>
+      <div id="tickerMenuPanel" class="ticker-menu-panel hidden">
+        <input id="tickerSearch" type="search" placeholder="Search tickers" style="width:100%;margin-bottom:10px" />
+        <div id="tickerFilters" class="muted">Tickers loading...</div>
+      </div>
+    </div>
     <label>Min confidence <input id="confidenceFilter" type="range" min="0" max="100" value="0" /></label>
     <span id="confidenceVal">0%</span>
   </div>
@@ -76,6 +88,9 @@ const statusEl = document.getElementById('status');
 const accuracyEl = document.getElementById('accuracy');
 const evaluationSummaryEl = document.getElementById('evaluationSummary');
 const signalFilter = document.getElementById('signalFilter');
+const tickerMenuButton = document.getElementById('tickerMenuButton');
+const tickerMenuPanel = document.getElementById('tickerMenuPanel');
+const tickerSearch = document.getElementById('tickerSearch');
 const tickerFiltersEl = document.getElementById('tickerFilters');
 const confFilter = document.getElementById('confidenceFilter');
 const confVal = document.getElementById('confidenceVal');
@@ -86,27 +101,54 @@ function updateClock(){document.getElementById('clock').textContent = new Date()
 setInterval(updateClock,1000); updateClock();
 confFilter.addEventListener('input', ()=>{confVal.textContent = confFilter.value + '%'; render();});
 signalFilter.addEventListener('change',render);
+tickerMenuButton.addEventListener('click', ()=>tickerMenuPanel.classList.toggle('hidden'));
+tickerSearch.addEventListener('input', ()=>syncTickerFilters());
+document.addEventListener('click', (event)=>{
+  if (!tickerMenuPanel.contains(event.target) && !tickerMenuButton.contains(event.target)) {
+    tickerMenuPanel.classList.add('hidden');
+  }
+});
 
 function renderLeaderboard(items){
   board.innerHTML = items.map(item=>`<div>${item.ticker}: ${item.count}</div>`).join('') || 'No alerts yet';
 }
 
 function syncTickerFilters(){
-  const tickers = [...new Set(alerts.map(alert => alert.ticker))].sort();
+  const counts = alerts.reduce((acc, alert) => {
+    acc[alert.ticker] = (acc[alert.ticker] || 0) + 1;
+    return acc;
+  }, {});
+  const tickers = Object.keys(counts).sort();
+  const search = tickerSearch.value.trim().toUpperCase();
+  const visibleTickers = tickers.filter(ticker => !search || ticker.includes(search));
+  tickerMenuButton.textContent = selectedTickers.size ? `Tickers (${selectedTickers.size})` : `Tickers (${tickers.length})`;
   if (!tickers.length) {
     tickerFiltersEl.textContent = 'No tickers yet';
     return;
   }
   const active = new Set([...selectedTickers].filter(ticker => tickers.includes(ticker)));
   selectedTickers = active;
-  tickerFiltersEl.innerHTML = tickers.map(ticker => {
+  tickerFiltersEl.innerHTML = visibleTickers.map(ticker => {
     const checked = !selectedTickers.size || selectedTickers.has(ticker) ? 'checked' : '';
-    return `<label style="margin-right:10px;display:inline-block"><input type="checkbox" value="${ticker}" ${checked} /> ${ticker}</label>`;
+    return `<div class="ticker-option">
+      <label><input type="checkbox" value="${ticker}" ${checked} /> ${ticker}</label>
+      <span class="muted">${counts[ticker]}</span>
+    </div>`;
   }).join('');
+  if (!visibleTickers.length) {
+    tickerFiltersEl.textContent = 'No matching tickers';
+    return;
+  }
   tickerFiltersEl.querySelectorAll('input[type="checkbox"]').forEach(input => {
     input.addEventListener('change', () => {
       const checkedTickers = [...tickerFiltersEl.querySelectorAll('input[type="checkbox"]:checked')].map(node => node.value);
-      selectedTickers = new Set(checkedTickers);
+      const hiddenSelections = [...selectedTickers].filter(ticker => !visibleTickers.includes(ticker));
+      if (checkedTickers.length === visibleTickers.length && visibleTickers.length === tickers.length) {
+        selectedTickers = new Set();
+      } else {
+        selectedTickers = new Set([...hiddenSelections, ...checkedTickers]);
+      }
+      tickerMenuButton.textContent = selectedTickers.size ? `Tickers (${selectedTickers.size})` : `Tickers (${tickers.length})`;
       render();
     });
   });

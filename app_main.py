@@ -59,8 +59,8 @@ SELL_WORDS = {
     "loss", "lawsuit", "bearish", "recall", "bankruptcy", "probe", "decline", "drops",
 }
 
-TICKER_REGEX = re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b")
-WORD_REGEX = re.compile(r"\b[A-Z]{2,5}(?:\.[A-Z])?\b")
+TICKER_REGEX = re.compile(r"\$([A-Z]{1,5}(?:\.[A-Z])?)\b(?!-\d)")
+WORD_REGEX = re.compile(r"\b[A-Z]{2,5}(?:\.[A-Z])?\b(?!-\d)")
 NOISE_TOKENS = {"THE", "AND", "FOR", "WITH", "FROM", "THIS", "THAT", "NEWS", "INC", "CEO", "ETF"}
 SYMBOL_HINT_REGEX = re.compile(r"(?:NYSE|NASDAQ|AMEX|OTC)[:\s]+([A-Z]{1,5}(?:\.[A-Z])?)")
 MACRO_HINT_WORDS = (
@@ -181,16 +181,16 @@ class StockNewsEngine:
         return macro_hits + index_mentions >= 1
 
     def _extract_tickers(self, text: str, url: str = "", symbols: list[str] | None = None) -> list[str]:
-        found = {m.group(1) for m in TICKER_REGEX.finditer(text)}
+        explicit = {m.group(1) for m in TICKER_REGEX.finditer(text)}
 
         for m in SYMBOL_HINT_REGEX.finditer(text):
-            found.add(m.group(1))
+            explicit.add(m.group(1))
 
         if symbols:
             for sym in symbols:
                 up = sym.upper().strip()
                 if re.fullmatch(r"[A-Z]{1,5}(?:\.[A-Z])?", up):
-                    found.add(up)
+                    explicit.add(up)
 
         parsed = urlparse(url) if url else None
         if parsed:
@@ -199,11 +199,13 @@ class StockNewsEngine:
                 for val in q.get(key, []):
                     up = val.upper().strip()
                     if re.fullmatch(r"[A-Z]{1,5}(?:\.[A-Z])?", up):
-                        found.add(up)
+                        explicit.add(up)
 
-        for token in WORD_REGEX.findall(text):
-            if token in self.tickers:
-                found.add(token)
+        found = set(explicit)
+        if not found:
+            for token in WORD_REGEX.findall(text):
+                if token in self.tickers:
+                    found.add(token)
 
         cleaned = {token for token in found if token not in NOISE_TOKENS}
         ordered = sorted(cleaned)
